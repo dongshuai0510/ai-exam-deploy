@@ -23,8 +23,17 @@ function cellToString(cell: unknown): string {
 }
 
 export async function parseExcelFile(file: File): Promise<ImportResult> {
-  const buffer = await file.arrayBuffer()
-  const workbook = XLSX.read(buffer, { type: 'array' })
+  let workbook: XLSX.WorkBook
+  try {
+    const buffer = await file.arrayBuffer()
+    workbook = XLSX.read(buffer, { type: 'array' })
+  } catch {
+    throw new Error('文件解析失败，请确认文件为有效的 Excel 格式（.xlsx / .xls）')
+  }
+
+  if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+    throw new Error('Excel 文件中没有找到任何工作表')
+  }
 
   // Find the data sheet (skip instruction sheets)
   let sheetName = workbook.SheetNames[0]
@@ -49,10 +58,17 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     raw: false,
   }) as string[][]
 
-  if (!rawRows || rawRows.length === 0) throw new Error('文件内容为空')
+  if (!rawRows || rawRows.length === 0) throw new Error('文件内容为空，请检查文件是否有数据')
 
   const { headerRowIndex, dataStartIndex } = findDataStartRow(rawRows)
-  const headers = rawRows[headerRowIndex].map(cellToString)
+  const headers = rawRows[headerRowIndex].map(cellToString).filter(Boolean)
+
+  if (headers.length === 0) throw new Error('未找到有效的表头行，请确认文件格式正确')
+
+  const dataRows = rawRows.slice(dataStartIndex)
+  if (dataRows.filter(row => row.some(cell => cellToString(cell) !== '')).length === 0) {
+    throw new Error('文件中没有找到有效数据行，请确认文件内容不为空')
+  }
 
   // Check saved templates first
   const savedTemplates = getSavedTemplates()
@@ -82,7 +98,6 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     }
   }
 
-  const dataRows = rawRows.slice(dataStartIndex)
   const rows = dataRows
     .filter(row => row.some(cell => cellToString(cell) !== ''))
     .map((row, idx) => {

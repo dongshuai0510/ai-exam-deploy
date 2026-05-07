@@ -19,6 +19,7 @@ export default function Home() {
   const [step, setStep] = useState<Step>('upload')
   const [loading, setLoading] = useState(false)
   const [parseProgress, setParseProgress] = useState(0)
+  const [parsedCount, setParsedCount] = useState(0)
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
   const [rows, setRows] = useState<OrderRow[]>([])
   const [showMappingEditor, setShowMappingEditor] = useState(false)
@@ -34,9 +35,18 @@ export default function Home() {
     }, 100)
 
     try {
+      // Validate file type before parsing
+      if (!file.name.match(/\.(xlsx|xls)$/i)) {
+        throw new Error('文件格式错误，请上传 .xlsx 或 .xls 格式的文件')
+      }
+      if (file.size === 0) {
+        throw new Error('文件内容为空，请检查文件是否正确')
+      }
+
       const result = await parseExcelFile(file)
       clearInterval(progressInterval)
       setParseProgress(100)
+      setParsedCount(result.rows.length)
 
       setImportResult(result)
       setRows(result.rows)
@@ -205,7 +215,9 @@ export default function Home() {
               <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm text-gray-600">正在解析 Excel 文件...</span>
-                  <span className="text-sm font-medium text-blue-600">{parseProgress}%</span>
+                  <span className="text-sm font-medium text-blue-600">
+                    {parseProgress}%{parsedCount > 0 ? ` · 已解析 ${parsedCount} 条` : ''}
+                  </span>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-2">
                   <div
