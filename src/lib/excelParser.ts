@@ -4,15 +4,32 @@ import { autoDetectMapping, generateHeaderKey } from './fieldMapping'
 import { getSavedTemplates } from './templateStorage'
 
 function findDataStartRow(rows: string[][]): { headerRowIndex: number; dataStartIndex: number } {
-  // Find the first row that looks like a header (has multiple non-empty cells)
-  for (let i = 0; i < Math.min(rows.length, 5); i++) {
+  // Look for the row that best matches known field aliases (most matches = header row)
+  const knownKeywords = [
+    '发件', '收件', '发货', '收货', '寄件', 'sender', 'receiver', 'weight', 'qty',
+    '重量', '件数', '温层', '温度', '电话', 'tel', 'phone', 'address', '地址', '姓名', 'name',
+  ]
+
+  let bestRow = 0
+  let bestScore = 0
+
+  for (let i = 0; i < Math.min(rows.length, 6); i++) {
     const row = rows[i]
     const nonEmpty = row.filter(c => c && c.trim()).length
-    if (nonEmpty >= 3) {
-      return { headerRowIndex: i, dataStartIndex: i + 1 }
+    if (nonEmpty < 3) continue
+
+    const score = row.filter(cell => {
+      const lower = (cell || '').toLowerCase()
+      return knownKeywords.some(kw => lower.includes(kw.toLowerCase()))
+    }).length
+
+    if (score > bestScore) {
+      bestScore = score
+      bestRow = i
     }
   }
-  return { headerRowIndex: 0, dataStartIndex: 1 }
+
+  return { headerRowIndex: bestRow, dataStartIndex: bestRow + 1 }
 }
 
 function cellToString(cell: unknown): string {
@@ -61,7 +78,7 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
   if (!rawRows || rawRows.length === 0) throw new Error('文件内容为空，请检查文件是否有数据')
 
   const { headerRowIndex, dataStartIndex } = findDataStartRow(rawRows)
-  const headers = rawRows[headerRowIndex].map(cellToString).filter(Boolean)
+  const headers = rawRows[headerRowIndex].map(cellToString)
 
   if (headers.length === 0) throw new Error('未找到有效的表头行，请确认文件格式正确')
 
