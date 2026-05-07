@@ -1,65 +1,282 @@
-import Image from "next/image";
+'use client'
+
+import { useState, useCallback } from 'react'
+import { FileUpload } from '@/components/FileUpload'
+import { MappingEditor } from '@/components/MappingEditor'
+import { DataTable } from '@/components/DataTable'
+import { OrderList } from '@/components/OrderList'
+import { parseExcelFile } from '@/lib/excelParser'
+import { getMappingCompleteness, generateHeaderKey } from '@/lib/fieldMapping'
+import { saveTemplate } from '@/lib/templateStorage'
+import { OrderRow, ColumnMapping, ImportResult } from '@/types/order'
+import { toast, Toaster } from 'sonner'
+
+type Step = 'upload' | 'mapping' | 'preview'
+type Tab = 'import' | 'orders'
 
 export default function Home() {
+  const [tab, setTab] = useState<Tab>('import')
+  const [step, setStep] = useState<Step>('upload')
+  const [loading, setLoading] = useState(false)
+  const [parseProgress, setParseProgress] = useState(0)
+  const [importResult, setImportResult] = useState<ImportResult | null>(null)
+  const [rows, setRows] = useState<OrderRow[]>([])
+  const [showMappingEditor, setShowMappingEditor] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [submitProgress, setSubmitProgress] = useState(0)
+
+  const handleFile = useCallback(async (file: File) => {
+    setLoading(true)
+    setParseProgress(0)
+
+    const progressInterval = setInterval(() => {
+      setParseProgress(p => Math.min(p + 10, 85))
+    }, 100)
+
+    try {
+      const result = await parseExcelFile(file)
+      clearInterval(progressInterval)
+      setParseProgress(100)
+
+      setImportResult(result)
+      setRows(result.rows)
+
+      const { complete } = getMappingCompleteness(result.mapping)
+      if (!complete) {
+        setShowMappingEditor(true)
+        setStep('mapping')
+        toast.info('部分字段未能自动识别，请手动配置映射')
+      } else {
+        setStep('preview')
+        if (result.templateId) {
+          toast.success(`已自动应用已记忆的模板映射，共 ${result.rows.length} 条数据`)
+        } else {
+          toast.success(`解析成功，共 ${result.rows.length} 条数据`)
+        }
+      }
+    } catch (err) {
+      clearInterval(progressInterval)
+      toast.error(`解析失败：${String(err)}`)
+    } finally {
+      setLoading(false)
+      setParseProgress(0)
+    }
+  }, [])
+
+  const handleMappingConfirm = useCallback(async (mapping: ColumnMapping) => {
+    if (!importResult) return
+    const headerKey = generateHeaderKey(importResult.headers)
+    saveTemplate(headerKey, mapping)
+    setImportResult({ ...importResult, mapping })
+    setShowMappingEditor(false)
+    setStep('preview')
+    toast.success('映射已保存，下次上传相同格式文件将自动应用')
+  }, [importResult])
+
+  const handleSubmit = useCallback(async () => {
+    const validRows = rows.filter(r => Object.keys(r._errors).length === 0)
+    if (validRows.length === 0) {
+      toast.error('没有可提交的有效数据')
+      return
+    }
+
+    setSubmitting(true)
+    setSubmitProgress(0)
+
+    const BATCH_SIZE = 50
+    const batches: OrderRow[][] = []
+    for (let i = 0; i < validRows.length; i += BATCH_SIZE) {
+      batches.push(validRows.slice(i, i + BATCH_SIZE))
+    }
+
+    let submitted = 0
+    let failed = 0
+
+    try {
+      for (const batch of batches) {
+        const res = await fetch('/api/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(batch.map(r => ({
+            externalCode: r.externalCode,
+            senderName: r.senderName,
+            senderPhone: r.senderPhone,
+            senderAddress: r.senderAddress,
+            receiverName: r.receiverName,
+            receiverPhone: r.receiverPhone,
+            receiverAddress: r.receiverAddress,
+            weight: r.weight,
+            quantity: r.quantity,
+            tempZone: r.tempZone,
+            note: r.note,
+          }))),
+        })
+        const data = await res.json()
+        if (data.success) {
+          submitted += data.count
+        } else {
+          failed += batch.length
+        }
+        setSubmitProgress(Math.round((submitted + failed) / validRows.length * 100))
+      }
+
+      if (failed === 0) {
+        toast.success(`提交成功！共写入 ${submitted} 条运单`)
+        setStep('upload')
+        setRows([])
+        setImportResult(null)
+        setTab('orders')
+      } else {
+        toast.warning(`部分提交失败：成功 ${submitted} 条，失败 ${failed} 条`)
+      }
+    } catch (err) {
+      toast.error(`提交失败：${String(err)}`)
+    } finally {
+      setSubmitting(false)
+      setSubmitProgress(0)
+    }
+  }, [rows])
+
+  const reset = () => {
+    setStep('upload')
+    setRows([])
+    setImportResult(null)
+    setShowMappingEditor(false)
+  }
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="min-h-screen bg-gray-50">
+      <Toaster position="top-right" richColors />
+
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-20">
+        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
+              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            </div>
+            <h1 className="text-lg font-bold text-gray-900">万能导入下单系统</h1>
+          </div>
+          <nav className="flex gap-1">
+            {(['import', 'orders'] as Tab[]).map(t => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`px-4 py-2 text-sm rounded-lg transition-colors
+                  ${tab === t ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'}`}
+              >
+                {t === 'import' ? '导入下单' : '已导入运单'}
+              </button>
+            ))}
+          </nav>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-4 py-6">
+        {tab === 'import' ? (
+          <div className="flex flex-col gap-6">
+            <div className="flex items-center gap-2">
+              {[
+                { key: 'upload', label: '上传文件' },
+                { key: 'mapping', label: '字段映射' },
+                { key: 'preview', label: '预览提交' },
+              ].map((s, i) => (
+                <div key={s.key} className="flex items-center gap-2">
+                  {i > 0 && <div className="w-8 h-px bg-gray-300" />}
+                  <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-sm
+                    ${step === s.key ? 'bg-blue-600 text-white' :
+                      ['upload', 'mapping', 'preview'].indexOf(step) > i
+                        ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                    <span className="font-medium">{i + 1}</span>
+                    <span>{s.label}</span>
+                  </div>
+                </div>
+              ))}
+              {step !== 'upload' && (
+                <button onClick={reset} className="ml-auto text-sm text-gray-400 hover:text-gray-600">
+                  重新上传
+                </button>
+              )}
+            </div>
+
+            {loading && parseProgress > 0 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm text-gray-600">正在解析 Excel 文件...</span>
+                  <span className="text-sm font-medium text-blue-600">{parseProgress}%</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div
+                    className="bg-blue-600 h-2 rounded-full transition-all duration-200"
+                    style={{ width: `${parseProgress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {step === 'upload' && (
+              <div className="bg-white rounded-xl border border-gray-200 p-6">
+                <h2 className="text-base font-semibold text-gray-800 mb-4">上传 Excel 文件</h2>
+                <FileUpload onFile={handleFile} loading={loading} />
+                <p className="text-xs text-gray-400 mt-3 text-center">
+                  支持多种模板格式，系统自动识别列名映射
+                </p>
+              </div>
+            )}
+
+            {step === 'mapping' && importResult && (
+              <div className="bg-white rounded-xl border border-gray-200 p-6">
+                <MappingEditor
+                  headers={importResult.headers}
+                  mapping={importResult.mapping}
+                  onConfirm={handleMappingConfirm}
+                  onCancel={reset}
+                  autoDetected={false}
+                />
+              </div>
+            )}
+
+            {step === 'preview' && (
+              <div className="bg-white rounded-xl border border-gray-200 p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-base font-semibold text-gray-800">数据预览与编辑</h2>
+                  <button
+                    onClick={() => setShowMappingEditor(!showMappingEditor)}
+                    className="text-sm text-blue-600 hover:underline"
+                  >
+                    {showMappingEditor ? '隐藏映射配置' : '查看/修改映射'}
+                  </button>
+                </div>
+                {showMappingEditor && importResult && (
+                  <div className="mb-4">
+                    <MappingEditor
+                      headers={importResult.headers}
+                      mapping={importResult.mapping}
+                      onConfirm={handleMappingConfirm}
+                      onCancel={() => setShowMappingEditor(false)}
+                      autoDetected={true}
+                    />
+                  </div>
+                )}
+                <DataTable
+                  rows={rows}
+                  onChange={setRows}
+                  onSubmit={handleSubmit}
+                  submitting={submitting}
+                  submitProgress={submitProgress}
+                />
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="bg-white rounded-xl border border-gray-200 p-6">
+            <h2 className="text-base font-semibold text-gray-800 mb-4">已导入运单列表</h2>
+            <OrderList />
+          </div>
+        )}
       </main>
     </div>
-  );
+  )
 }
