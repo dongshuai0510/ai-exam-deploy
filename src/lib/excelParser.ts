@@ -4,22 +4,25 @@ import { autoDetectMapping, generateHeaderKey } from './fieldMapping'
 import { getSavedTemplates } from './templateStorage'
 
 function findDataStartRow(rows: string[][]): { headerRowIndex: number; dataStartIndex: number } {
-  // Look for the row that best matches known field aliases (most matches = header row)
   const knownKeywords = [
     '发件', '收件', '发货', '收货', '寄件', 'sender', 'receiver', 'weight', 'qty',
     '重量', '件数', '温层', '温度', '电话', 'tel', 'phone', 'address', '地址', '姓名', 'name',
+    '编码', '单号', 'code', 'order', '备注', 'note', 'remark',
   ]
 
-  let bestRow = 0
+  let bestRow = -1
   let bestScore = 0
+  let firstNonEmptyRow = -1
 
-  for (let i = 0; i < Math.min(rows.length, 6); i++) {
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
     const row = rows[i]
-    const nonEmpty = row.filter(c => c && c.trim()).length
-    if (nonEmpty < 3) continue
+    const nonEmpty = row.filter(c => c && String(c).trim()).length
+    if (nonEmpty < 2) continue
+
+    if (firstNonEmptyRow === -1) firstNonEmptyRow = i
 
     const score = row.filter(cell => {
-      const lower = (cell || '').toLowerCase()
+      const lower = String(cell || '').toLowerCase()
       return knownKeywords.some(kw => lower.includes(kw.toLowerCase()))
     }).length
 
@@ -28,6 +31,9 @@ function findDataStartRow(rows: string[][]): { headerRowIndex: number; dataStart
       bestRow = i
     }
   }
+
+  // If no keyword match found, use first non-empty row as header
+  if (bestRow === -1) bestRow = Math.max(0, firstNonEmptyRow)
 
   return { headerRowIndex: bestRow, dataStartIndex: bestRow + 1 }
 }
@@ -83,7 +89,8 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
   if (headers.length === 0) throw new Error('未找到有效的表头行，请确认文件格式正确')
 
   const dataRows = rawRows.slice(dataStartIndex)
-  if (dataRows.filter(row => row.some(cell => cellToString(cell) !== '')).length === 0) {
+  const validDataRows = dataRows.filter(row => row.filter(cell => cellToString(cell) !== '').length >= 2)
+  if (validDataRows.length === 0) {
     throw new Error('文件中没有找到有效数据行，请确认文件内容不为空')
   }
 
@@ -115,8 +122,7 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     }
   }
 
-  const rows = dataRows
-    .filter(row => row.some(cell => cellToString(cell) !== ''))
+  const rows = validDataRows
     .map((row, idx) => {
       const get = (colName: string) => {
         if (!colName) return ''
