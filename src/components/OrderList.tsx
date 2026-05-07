@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 
 interface Order {
   id: string
@@ -25,19 +25,19 @@ export function OrderList() {
   const [page, setPage] = useState(1)
   const [total, setTotal] = useState(0)
   const [search, setSearch] = useState('')
-  const [sortBy, setSortBy] = useState('created_at')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const pageSize = 20
 
-  const fetchOrders = async () => {
+  const fetchOrders = useCallback(async () => {
     setLoading(true)
     try {
       const params = new URLSearchParams({
         page: String(page),
         pageSize: String(pageSize),
         search,
-        sortBy,
-        sortDir,
+        dateFrom,
+        dateTo,
       })
       const res = await fetch(`/api/orders?${params}`)
       const data = await res.json()
@@ -50,40 +50,46 @@ export function OrderList() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [page, search, dateFrom, dateTo])
 
-  useEffect(() => { fetchOrders() }, [page, search, sortBy, sortDir])
+  useEffect(() => { fetchOrders() }, [fetchOrders])
 
   const totalPages = Math.ceil(total / pageSize)
 
-  const handleSort = (col: string) => {
-    if (sortBy === col) {
-      setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortBy(col)
-      setSortDir('desc')
-    }
-    setPage(1)
-  }
-
-  const SortIcon = ({ col }: { col: string }) => {
-    if (sortBy !== col) return <span className="text-gray-300 ml-1">↕</span>
-    return <span className="text-blue-500 ml-1">{sortDir === 'asc' ? '↑' : '↓'}</span>
-  }
+  const handleSearch = (val: string) => { setSearch(val); setPage(1) }
+  const handleDateFrom = (val: string) => { setDateFrom(val); setPage(1) }
+  const handleDateTo = (val: string) => { setDateTo(val); setPage(1) }
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-3">
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-3">
         <input
           type="text"
-          placeholder="搜索发件人、收件人或外部编码..."
+          placeholder="搜索外部编码或收件人姓名..."
           value={search}
-          onChange={e => { setSearch(e.target.value); setPage(1) }}
-          className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          onChange={e => handleSearch(e.target.value)}
+          className="flex-1 min-w-[200px] border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
+        <div className="flex items-center gap-2">
+          <label className="text-sm text-gray-500 whitespace-nowrap">提交时间</label>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={e => handleDateFrom(e.target.value)}
+            className="border border-gray-300 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <span className="text-gray-400 text-sm">—</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={e => handleDateTo(e.target.value)}
+            className="border border-gray-300 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
         <button
           onClick={fetchOrders}
-          className="px-4 py-2 text-sm bg-gray-100 rounded-lg hover:bg-gray-200"
+          className="px-4 py-2 text-sm bg-gray-100 rounded-lg hover:bg-gray-200 whitespace-nowrap"
         >
           刷新
         </button>
@@ -97,7 +103,7 @@ export function OrderList() {
         <>
           <div className="overflow-x-auto rounded-xl border border-gray-200">
             <table className="min-w-full text-sm">
-              <thead className="bg-gray-50">
+              <thead className="bg-gray-50 sticky top-0">
                 <tr>
                   {[
                     { key: 'external_code', label: '外部编码' },
@@ -108,14 +114,13 @@ export function OrderList() {
                     { key: 'quantity', label: '件数' },
                     { key: 'temp_zone', label: '温层' },
                     { key: 'status', label: '状态' },
-                    { key: 'created_at', label: '创建时间' },
+                    { key: 'created_at', label: '提交时间' },
                   ].map(col => (
                     <th
                       key={col.key}
-                      onClick={() => handleSort(col.key)}
-                      className="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 cursor-pointer hover:text-gray-700 whitespace-nowrap"
+                      className="px-3 py-2.5 text-left text-xs font-semibold text-gray-500 whitespace-nowrap"
                     >
-                      {col.label}<SortIcon col={col.key} />
+                      {col.label}
                     </th>
                   ))}
                 </tr>

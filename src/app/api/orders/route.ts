@@ -19,8 +19,24 @@ const OrderSchema = z.object({
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const rows = z.array(OrderSchema).parse(body)
 
+    // Handle duplicate check request
+    if (body.action === 'checkDuplicates') {
+      const codes = z.array(z.string()).parse(body.codes)
+      await initDb()
+      const sql = getDb()
+      if (codes.length === 0) return NextResponse.json({ success: true, duplicates: [] })
+      const existing = await sql`
+        SELECT external_code FROM orders
+        WHERE external_code = ANY(${codes})
+      `
+      return NextResponse.json({
+        success: true,
+        duplicates: existing.map((r: Record<string, unknown>) => r.external_code as string),
+      })
+    }
+
+    const rows = z.array(OrderSchema).parse(body)
     await initDb()
     const sql = getDb()
 
@@ -55,44 +71,43 @@ export async function GET(req: NextRequest) {
     await initDb()
     const sql = getDb()
     const { searchParams } = new URL(req.url)
-    const page = parseInt(searchParams.get('page') || '1')
-    const pageSize = parseInt(searchParams.get('pageSize') || '20')
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1'))
+    const pageSize = Math.min(100, Math.max(1, parseInt(searchParams.get('pageSize') || '20')))
     const search = searchParams.get('search') || ''
-    const sortBy = searchParams.get('sortBy') || 'created_at'
-    const sortDir = searchParams.get('sortDir') === 'asc' ? 'ASC' : 'DESC'
+    const dateFrom = searchParams.get('dateFrom') || ''
+    const dateTo = searchParams.get('dateTo') || ''
     const offset = (page - 1) * pageSize
 
-    const allowedSort = ['created_at', 'sender_name', 'receiver_name', 'weight', 'quantity', 'temp_zone', 'status']
-    const safeSort = allowedSort.includes(sortBy) ? sortBy : 'created_at'
+    // Build query with optional filters - use tagged template for safety
+    let rows, countResult
 
-    let rows, total
-
-    if (search) {
-      rows = await sql`
-        SELECT * FROM orders
-        WHERE sender_name ILIKE ${'%' + search + '%'}
-           OR receiver_name ILIKE ${'%' + search + '%'}
-           OR external_code ILIKE ${'%' + search + '%'}
-        ORDER BY created_at DESC
-        LIMIT ${pageSize} OFFSET ${offset}
-      `
-      const [{ count }] = await sql`
-        SELECT COUNT(*) as count FROM orders
-        WHERE sender_name ILIKE ${'%' + search + '%'}
-           OR receiver_name ILIKE ${'%' + search + '%'}
-           OR external_code ILIKE ${'%' + search + '%'}
-      `
-      total = parseInt(count)
+    if (search && dateFrom && dateTo) {
+      rows = await sql`SELECT * FROM orders WHERE (receiver_name ILIKE ${'%' + search + '%'} OR external_code ILIKE ${'%' + search + '%'}) AND created_at >= ${dateFrom} AND created_at < ${dateTo + 'T23:59:59Z'} ORDER BY created_at DESC LIMIT ${pageSize} OFFSET ${offset}`
+      countResult = await sql`SELECT COUNT(*) as count FROM orders WHERE (receiver_name ILIKE ${'%' + search + '%'} OR external_code ILIKE ${'%' + search + '%'}) AND created_at >= ${dateFrom} AND created_at < ${dateTo + 'T23:59:59Z'}`
+    } else if (search && dateFrom) {
+      rows = await sql`SELECT * FROM orders WHERE (receiver_name ILIKE ${'%' + search + '%'} OR external_code ILIKE ${'%' + search + '%'}) AND created_at >= ${dateFrom} ORDER BY created_at DESC LIMIT ${pageSize} OFFSET ${offset}`
+      countResult = await sql`SELECT COUNT(*) as count FROM orders WHERE (receiver_name ILIKE ${'%' + search + '%'} OR external_code ILIKE ${'%' + search + '%'}) AND created_at >= ${dateFrom}`
+    } else if (search && dateTo) {
+      rows = await sql`SELECT * FROM orders WHERE (receiver_name ILIKE ${'%' + search + '%'} OR external_code ILIKE ${'%' + search + '%'}) AND created_at < ${dateTo + 'T23:59:59Z'} ORDER BY created_at DESC LIMIT ${pageSize} OFFSET ${offset}`
+      countResult = await sql`SELECT COUNT(*) as count FROM orders WHERE (receiver_name ILIKE ${'%' + search + '%'} OR external_code ILIKE ${'%' + search + '%'}) AND created_at < ${dateTo + 'T23:59:59Z'}`
+    } else if (dateFrom && dateTo) {
+      rows = await sql`SELECT * FROM orders WHERE created_at >= ${dateFrom} AND created_at < ${dateTo + 'T23:59:59Z'} ORDER BY created_at DESC LIMIT ${pageSize} OFFSET ${offset}`
+      countResult = await sql`SELECT COUNT(*) as count FROM orders WHERE created_at >= ${dateFrom} AND created_at < ${dateTo + 'T23:59:59Z'}`
+    } else if (dateFrom) {
+      rows = await sql`SELECT * FROM orders WHERE created_at >= ${dateFrom} ORDER BY created_at DESC LIMIT ${pageSize} OFFSET ${offset}`
+      countResult = await sql`SELECT COUNT(*) as count FROM orders WHERE created_at >= ${dateFrom}`
+    } else if (dateTo) {
+      rows = await sql`SELECT * FROM orders WHERE created_at < ${dateTo + 'T23:59:59Z'} ORDER BY created_at DESC LIMIT ${pageSize} OFFSET ${offset}`
+      countResult = await sql`SELECT COUNT(*) as count FROM orders WHERE created_at < ${dateTo + 'T23:59:59Z'}`
+    } else if (search) {
+      rows = await sql`SELECT * FROM orders WHERE receiver_name ILIKE ${'%' + search + '%'} OR external_code ILIKE ${'%' + search + '%'} ORDER BY created_at DESC LIMIT ${pageSize} OFFSET ${offset}`
+      countResult = await sql`SELECT COUNT(*) as count FROM orders WHERE receiver_name ILIKE ${'%' + search + '%'} OR external_code ILIKE ${'%' + search + '%'}`
     } else {
-      rows = await sql`
-        SELECT * FROM orders
-        ORDER BY created_at DESC
-        LIMIT ${pageSize} OFFSET ${offset}
-      `
-      const [{ count }] = await sql`SELECT COUNT(*) as count FROM orders`
-      total = parseInt(count)
+      rows = await sql`SELECT * FROM orders ORDER BY created_at DESC LIMIT ${pageSize} OFFSET ${offset}`
+      countResult = await sql`SELECT COUNT(*) as count FROM orders`
     }
 
+    const total = parseInt(countResult[0].count)
     return NextResponse.json({ success: true, rows, total, page, pageSize })
   } catch (err) {
     console.error(err)
