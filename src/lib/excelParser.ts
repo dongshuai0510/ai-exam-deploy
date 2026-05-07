@@ -58,16 +58,16 @@ export async function parseExcelFile(file: File): Promise<ImportResult> {
     throw new Error('Excel 文件中没有找到任何工作表')
   }
 
-  // Find the data sheet (skip instruction sheets)
+  // Find the data sheet: prefer the sheet with the most columns (widest = data sheet)
   let sheetName = workbook.SheetNames[0]
   if (workbook.SheetNames.length > 1) {
-    // Try to find a sheet with actual data (not just instructions)
+    let bestCols = 0
     for (const name of workbook.SheetNames) {
       const ws = workbook.Sheets[name]
       const range = XLSX.utils.decode_range(ws['!ref'] || 'A1')
-      if (range.e.r > 2) {
+      if (range.e.c > bestCols) {
+        bestCols = range.e.c
         sheetName = name
-        break
       }
     }
   }
